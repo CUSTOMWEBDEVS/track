@@ -1,6 +1,6 @@
 {
-  "name": "TrackTheDrops",
-  "short_name": "TrackTheDrops",
+  "name": "TrackTheDrop",
+  "short_name": "TrackTheDrop",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0b0e13",

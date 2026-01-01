@@ -10,9 +10,9 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="TrackTheDrop" />
-  <title>TrackTheDrop</title>
+  <title>TrackTheDrop — Mobile</title>
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="stylesheet" href="./style.css">
+<link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <main class="app" id="app">
@@ -20,34 +20,6 @@
       <video id="video" playsinline muted class="gray"></video>
       <canvas id="overlay" class="overlay"></canvas>
       <div class="flash" id="flash"></div>
-
-      <!-- Last Sign Lock Mode overlay -->
-      <section class="ls-lock" id="lsLock" aria-hidden="true">
-        <div class="ls-top">
-          <div class="ls-chip" id="lsSignal">GPS: —</div>
-          <div class="ls-chip" id="lsAge">Last sign: —</div>
-          <button class="ls-exit" id="lsExitBtn" type="button" aria-label="Exit Last Sign Lock">Exit</button>
-        </div>
-
-        <div class="ls-core">
-          <div class="ls-arrow-wrap">
-            <div class="ls-arrow" id="lsArrow" aria-hidden="true"></div>
-            <div class="ls-ring" aria-hidden="true"></div>
-          </div>
-
-          <div class="ls-readout">
-            <div class="ls-distance" id="lsDistance">—</div>
-            <div class="ls-bearing" id="lsBearing">—</div>
-            <div class="ls-hint" id="lsHint">Walk slow. Mark new sign the second you see it.</div>
-          </div>
-        </div>
-
-        <div class="ls-actions">
-          <button class="ls-btn primary" id="lsMarkBtn" type="button">Mark new sign</button>
-          <button class="ls-btn" id="lsSetBtn" type="button">Set / Move last sign</button>
-          <button class="ls-btn danger" id="lsClearBtn" type="button">Clear</button>
-        </div>
-      </section>
 
       <div class="hud" id="hud">
         <span id="status">Booting…</span>
@@ -57,10 +29,9 @@
       <nav class="toolbar" id="toolbar">
         <button class="tool" id="startBtn" type="button">Start</button>
         <button class="tool" id="torchBtn" type="button">Flashlight</button>
-        <button class="tool" id="lastSignBtn" type="button">Last Sign</button>
         <button class="tool alert" id="alertBtn" aria-pressed="true" type="button">Alert: On</button>
-        <button class="tool" id="nightBtn" aria-pressed="false" type="button">Night: Off</button>
-        <button class="tool secondary" id="installBtn" type="button">Install</button>
+        <button class="tool" id="strictBtn" type="button">Strict: 50</button>
+        <button class="tool secondary" id="installBtn" type="button">Get the app</button>
       </nav>
     </section>
   </main>
@@ -69,31 +40,13 @@
   <div class="install-shell" id="installShell" aria-hidden="true">
     <div class="install-panel" id="installPanel" role="dialog" aria-modal="true" aria-labelledby="installTitle">
       <button class="install-close" id="installClose" type="button" aria-label="Close install help">×</button>
-
-      <h2 id="installTitle">Install TrackTheDrops (offline)</h2>
-      <p class="install-subtitle">
-        You’ll get a home screen icon. Open it from the icon next time and it runs full-screen and works in the woods.
-      </p>
-
-      <div class="install-badges">
-        <div class="badge">No App Store</div>
-        <div class="badge">Works offline</div>
-        <div class="badge">Fast launch</div>
-      </div>
-
+      <h2 id="installTitle">Add TrackTheDrop to your phone</h2>
       <p class="install-env" id="installEnv">Detecting your phone…</p>
 
       <div class="install-steps" id="installSteps">
-        <div class="install-step-title">If you only do one thing:</div>
         <p class="install-note">
-          Add it to your home screen, then <strong>always launch it from that icon</strong> (not from the browser).
+          You&rsquo;ll get a home screen icon you can tap like any other app. Works offline once added.
         </p>
-      </div>
-
-      <div class="install-foot">
-        <div class="install-foot-note">
-          Tip: Once installed, open the app once at home on Wi‑Fi so it can cache everything for offline use.
-        </div>
       </div>
     </div>
   </div>

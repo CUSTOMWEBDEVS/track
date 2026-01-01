@@ -1,9 +1,8 @@
 (function(){
-  let DETECT_NIGHT = false;
-  let __maskEMA = null;
-  let __dynTight = 0;
-  const clamp = (v,a,b)=>Math.max(a, Math.min(b,v));
   'use strict';
+
+  // Detection strictness (50 = original baseline)
+  let STRICTNESS = 50;
   const $=id=>document.getElementById(id);
   const el={
     app:$('app'),
@@ -16,6 +15,7 @@
     startBtn:$('startBtn'),
     torchBtn:$('torchBtn'),
     alertBtn:$('alertBtn'),
+    strictBtn:$('strictBtn'),
     flash:$('flash'),
     sens:$('sens'),
     thr:$('thr'),
@@ -25,20 +25,7 @@
     installShell:$('installShell'),
     installSteps:$('installSteps'),
     installClose:$('installClose'),
-    installEnv:$('installEnv'),
-    nightBtn:$('nightBtn'),
-    lastSignBtn:$('lastSignBtn'),
-    lsLock:$('lsLock'),
-    lsExitBtn:$('lsExitBtn'),
-    lsMarkBtn:$('lsMarkBtn'),
-    lsSetBtn:$('lsSetBtn'),
-    lsClearBtn:$('lsClearBtn'),
-    lsArrow:$('lsArrow'),
-    lsDistance:$('lsDistance'),
-    lsBearing:$('lsBearing'),
-    lsSignal:$('lsSignal'),
-    lsAge:$('lsAge'),
-    lsHint:$('lsHint')
+    installEnv:$('installEnv')
   };
 
   const setStatus=s=>{ if(el.status) el.status.textContent=s };
@@ -99,30 +86,67 @@
   const hueDist=(deg,ref)=>{let d=Math.abs(deg-ref)%360;return d>180?360-d:d};
 
   // Slightly relaxed “is-blood-like” boolean gate
-  function isBloodish(r,g,b,sens,tight){
-  // tight: 0 (normal) -> 2 (very strict). Auto-adjusted per frame when scene is "too red".
-  const night = DETECT_NIGHT;
+  function isBloodish(r,g,b,sens){
+  // STRICTNESS: 0 = very sensitive, 50 = original baseline, 100 = very strict
+  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+  const adj = clamp((STRICTNESS-50)/50, -1, 1); // -1..1
 
+  const {h,s,v} = toHSV(r,g,b);
+  const hDeg = h*360;
+
+  // Base thresholds (original)
+  let hueTol = 14 + 6*(1-sens);              // wider at lower sens
+  let satMin = 0.53 - 0.10*sens;             // lower sens -> higher sat required
+  let vMin   = 0.08;                         // ignore very dark pixels
+  let vMax   = 0.70 + 0.04*(1-sens);          // allow slightly brighter reds
+  let yMax   = 192 + 8*(1-sens);              // reject very bright areas
+  let crRel  = 85 - 8*sens;                   // Cr-Cb must exceed
+  let domRG  = 12;
+  let domRB  = 20;
+
+  // Lab gate (original)
+  let aMin   = 30 - 6*(1-sens);
+  let bMax   = 26 + 6*(1-sens);
+  let LMax   = 72;
+
+  // Apply strictness adjustment: negative = loosen, positive = tighten
+  hueTol = clamp(hueTol - 6*adj, 6, 34);
+  satMin = clamp(satMin + 0.10*adj, 0.25, 0.85);
+  vMin   = clamp(vMin   + 0.04*adj, 0.03, 0.22);
+  vMax   = clamp(vMax   - 0.06*adj, 0.35, 0.92);
+  yMax   = clamp(yMax   - 22*adj, 120, 235);
+  crRel  = clamp(crRel  + 12*adj, 40, 120);
+  domRG  = clamp(domRG  + 10*adj, 0, 35);
+  domRB  = clamp(domRB  + 10*adj, 0, 45);
+
+  aMin   = clamp(aMin   + 10*adj, 10, 60);
+  bMax   = clamp(bMax   - 10*adj,  6, 50);
+  LMax   = clamp(LMax   - 10*adj, 45, 90);
+
+  // Basic red dominance
+  if(!(r>g && g>=b)) return 0;
+  if(r-g < domRG || r-b < domRB) return 0;
+
+  // Hue / sat / value gating
+  const nearRed = (hDeg<=hueTol || hDeg>=360-hueTol);
+  if(!nearRed) return 0;
+  if(s < satMin) return 0;
+  if(v < vMin || v > vMax) return 0;
+
+  // YCbCr gating: red tends to push Cr up and Cb down
   const Y  = 0.299*r + 0.587*g + 0.114*b;
+  if(Y > yMax) return 0;
   const Cb = 128 - 0.168736*r - 0.331264*g + 0.5*b;
   const Cr = 128 + 0.5*r - 0.418688*g - 0.081312*b;
+  if((Cr - Cb) < crRel) return 0;
 
-  const diff = Cr - Cb; // blood tends to have higher Cr and lower Cb
+  // Lab gating: blood is positive a (red/magenta) with relatively low b (not yellow)
+  const {L,a,bb} = rgbToLab(r,g,b);
+  if(a < aMin) return 0;
+  if(bb > bMax) return 0;
+  if(L > LMax) return 0;
 
-  const redDom = (r > g + (18 + tight*10)) && (r > b + (18 + tight*10));
-  const ratio  = r / (g + b + 1); // > ~0.50 means red is dominant
-
-  // Gates (night relaxes Y and diff slightly; tight raises dominance requirements)
-  const yGate   = Y > (night ? 12 : 24);
-  const cbGate  = Cb < (night ? 142 : 128);
-  const crGate  = Cr > (night ? 140 : 150);
-  const diffGate= diff > (night ? (10 + tight*10) : (18 + tight*14));
-  const ratioGate = ratio > (night ? (0.46 + tight*0.06) : (0.52 + tight*0.08));
-
-  // Kill obvious non-blood highlights (bright neutral surfaces)
-  if(!night && Y > 185 && !redDom) return 0;
-
-  return (yGate && cbGate && crGate && diffGate && ratioGate && redDom) ? 1 : 0;
+  return 1;
 }
 
   function blobs(binary,w,h,minArea,maxArea){
@@ -225,34 +249,20 @@
     const img=pctx.getImageData(0,0,procW,procH), d=img.data;
     // Use your older “good” feel: Sens ~0.70, Thr ~0.65, Stability ~2
     const sens = el.sens ? Number(el.sens.value)/100 : 0.70;
-    let thr  = el.thr  ? Number(el.thr.value)/100  : 0.65;
+    const thr  = el.thr  ? Number(el.thr.value)/100  : 0.65;
     const need = el.stability ? Math.max(1, Number(el.stability.value)) : 2;
     const alpha= el.opacity ? Number(el.opacity.value)/100 : 0.60;
 
     const score=new Float32Array(procW*procH);
     let max=-1e9,min=1e9;
-    let sumY=0;
     for(let p=0,i=0;p<d.length;p+=4,i++){
-      // Average luminance (night boost): helps in dark woods where the camera is noisy.
-      sumY += (0.299*d[p] + 0.587*d[p+1] + 0.114*d[p+2]);
       const s=isBloodish(d[p],d[p+1],d[p+2],sens)?1:0;
       score[i]=s; if(s>max)max=s; if(s<min)min=s;
     }
-    const avgY = sumY / (score.length||1);
-    // If it's very dark, make the mask more permissive so you don't have to be inches from the ground.
-    if(avgY < 55) thr = Math.max(0.40, thr - 0.10);
-    else if(avgY < 75) thr = Math.max(0.45, thr - 0.06);
     const rng=Math.max(1e-6,max-min);
     const bin=new Uint8Array(procW*procH);
-    // Temporal smoothing (EMA) over binary score to reduce flicker/noise.
-    // Keeps faint blood visible at night without needing to be inches from the ground.
-    if(!__maskEMA || __maskEMA.length !== score.length) __maskEMA = new Float32Array(score.length);
-    const emaA = DETECT_NIGHT ? 0.22 : (0.18 + __dynTight*0.04);
     for(let i=0;i<score.length;i++){
-      __maskEMA[i] = __maskEMA[i]*(1-emaA) + score[i]*emaA;
-    }
-    for(let i=0;i<score.length;i++){
-      const n=__maskEMA[i];
+      const n=(score[i]-min)/rng;
       if(n>=thr) bin[i]=1;
     }
 
@@ -287,236 +297,6 @@
     if(any) pulse();
     anim=requestAnimationFrame(loop);
   }
-
-
-  // ===========================
-  // Last Sign Lock Mode (killer feature)
-  // ===========================
-  const LS_STORAGE_KEY = 'ttd_last_sign_v1';
-  const LS_MARKERS_KEY = 'ttd_sign_markers_v1';
-
-  const LS = {
-    enabled: false,
-    watchId: null,
-    cur: null,       // {lat, lon, acc, ts, heading}
-    last: null,      // {lat, lon, ts}
-    markers: []      // [{lat, lon, ts, note}]
-  };
-
-  function lsLoad(){
-    try{
-      const last = JSON.parse(localStorage.getItem(LS_STORAGE_KEY) || 'null');
-      const markers = JSON.parse(localStorage.getItem(LS_MARKERS_KEY) || '[]');
-      if(last && typeof last.lat==='number' && typeof last.lon==='number'){
-        LS.last = last;
-      }
-      if(Array.isArray(markers)) LS.markers = markers.slice(-200);
-    }catch{}
-  }
-  function lsSave(){
-    try{
-      if(LS.last) localStorage.setItem(LS_STORAGE_KEY, JSON.stringify(LS.last));
-      else localStorage.removeItem(LS_STORAGE_KEY);
-      localStorage.setItem(LS_MARKERS_KEY, JSON.stringify(LS.markers.slice(-200)));
-    }catch{}
-  }
-
-  function toRad(d){ return d*Math.PI/180; }
-  function haversineMeters(aLat,aLon,bLat,bLon){
-    const R=6371000;
-    const dLat=toRad(bLat-aLat), dLon=toRad(bLon-aLon);
-    const s1=Math.sin(dLat/2), s2=Math.sin(dLon/2);
-    const A=s1*s1 + Math.cos(toRad(aLat))*Math.cos(toRad(bLat))*s2*s2;
-    return 2*R*Math.asin(Math.min(1, Math.sqrt(A)));
-  }
-  function bearingDeg(aLat,aLon,bLat,bLon){
-    const y = Math.sin(toRad(bLon-aLon))*Math.cos(toRad(bLat));
-    const x = Math.cos(toRad(aLat))*Math.sin(toRad(bLat)) - Math.sin(toRad(aLat))*Math.cos(toRad(bLat))*Math.cos(toRad(bLon-aLon));
-    let brng = Math.atan2(y,x) * 180/Math.PI;
-    brng = (brng + 360) % 360;
-    return brng;
-  }
-  function fmtDist(m){
-    if(!isFinite(m)) return '—';
-    if(m < 15) return Math.round(m) + ' m';
-    if(m < 1000) return Math.round(m/5)*5 + ' m';
-    const mi = m / 1609.344;
-    if(mi < 0.75) return (mi*5280).toFixed(0) + ' ft';
-    return mi.toFixed(mi < 2 ? 2 : 1) + ' mi';
-  }
-  function fmtBearing(d){
-    if(!isFinite(d)) return '—';
-    const dirs=['N','NE','E','SE','S','SW','W','NW','N'];
-    const idx=Math.round(d/45);
-    return d.toFixed(0)+'° '+dirs[idx];
-  }
-  function fmtAge(ts){
-    if(!ts) return '—';
-    const s = Math.max(0, Math.floor((Date.now()-ts)/1000));
-    if(s < 60) return s+'s ago';
-    const m = Math.floor(s/60);
-    if(m < 60) return m+'m ago';
-    const h = Math.floor(m/60);
-    if(h < 24) return h+'h '+(m%60)+'m ago';
-    const d = Math.floor(h/24);
-    return d+'d ago';
-  }
-
-  function lsShow(on){
-    if(!el.lsLock) return;
-    if(on){
-      el.lsLock.classList.add('show');
-      el.lsLock.setAttribute('aria-hidden','false');
-    }else{
-      el.lsLock.classList.remove('show');
-      el.lsLock.setAttribute('aria-hidden','true');
-    }
-  }
-
-  function lsUpdateUI(){
-    if(!el.lsDistance) return;
-    if(!LS.last){
-      el.lsDistance.textContent='Set last sign';
-      el.lsBearing.textContent='Tap “Set / Move last sign”';
-      if(el.lsAge) el.lsAge.textContent='Last sign: —';
-      return;
-    }
-    if(el.lsAge) el.lsAge.textContent='Last sign: '+fmtAge(LS.last.ts);
-    if(LS.cur){
-      const dist = haversineMeters(LS.cur.lat, LS.cur.lon, LS.last.lat, LS.last.lon);
-      const brng = bearingDeg(LS.cur.lat, LS.cur.lon, LS.last.lat, LS.last.lon);
-      const heading = (typeof LS.cur.heading === 'number' && isFinite(LS.cur.heading)) ? LS.cur.heading : 0;
-      const rel = (brng - heading + 360) % 360;
-
-      el.lsDistance.textContent = fmtDist(dist);
-      el.lsBearing.textContent = 'To last sign: ' + fmtBearing(brng) + (heading ? '  •  Heading '+fmtBearing(heading) : '');
-
-      if(el.lsArrow){
-        el.lsArrow.style.transform = 'rotate('+rel.toFixed(0)+'deg)';
-      }
-      if(el.lsSignal){
-        const acc = LS.cur.acc ? Math.round(LS.cur.acc) : null;
-        el.lsSignal.textContent = 'GPS: ' + (acc ? '±'+acc+' m' : '—');
-      }
-    }else{
-      el.lsDistance.textContent='Getting GPS…';
-      el.lsBearing.textContent='Allow location to show direction + distance.';
-      if(el.lsSignal) el.lsSignal.textContent='GPS: —';
-    }
-  }
-
-  function lsStartWatch(){
-    if(LS.watchId!=null) return;
-    if(!('geolocation' in navigator)){
-      setStatus('No GPS available on this device.');
-      return;
-    }
-    try{
-      LS.watchId = navigator.geolocation.watchPosition(
-        pos=>{
-          const c = pos.coords;
-          LS.cur = {
-            lat: c.latitude,
-            lon: c.longitude,
-            acc: c.accuracy,
-            heading: (typeof c.heading === 'number') ? c.heading : null,
-            ts: Date.now()
-          };
-          lsUpdateUI();
-        },
-        err=>{
-          LS.cur = null;
-          lsUpdateUI();
-          setStatus('GPS: ' + (err && err.message ? err.message : 'permission denied'));
-        },
-        { enableHighAccuracy:true, maximumAge:1000, timeout:12000 }
-      );
-    }catch{
-      setStatus('GPS error');
-    }
-  }
-  function lsStopWatch(){
-    if(LS.watchId!=null){
-      try{ navigator.geolocation.clearWatch(LS.watchId); }catch{}
-      LS.watchId=null;
-    }
-  }
-
-  function lsEnter(){
-    LS.enabled = true;
-    lsShow(true);
-    lsStartWatch();
-    lsUpdateUI();
-    if(el.lastSignBtn) el.lastSignBtn.textContent='Locked';
-    setStatus('Last Sign Lock: ON');
-  }
-  function lsExit(){
-    LS.enabled = false;
-    lsShow(false);
-    lsStopWatch();
-    if(el.lastSignBtn) el.lastSignBtn.textContent='Last Sign';
-    setStatus('Last Sign Lock: OFF');
-  }
-
-  function lsSetFromCurrent(){
-    if(!LS.cur){
-      setStatus('Getting GPS… try again in a second.');
-      lsStartWatch();
-      return;
-    }
-    LS.last = { lat: LS.cur.lat, lon: LS.cur.lon, ts: Date.now() };
-    lsSave();
-    pulse(); // tiny confirmation feedback
-    lsUpdateUI();
-    setStatus('Saved last sign.');
-  }
-
-  function lsMarkNewSign(){
-    if(!LS.cur){
-      setStatus('Getting GPS… try again in a second.');
-      lsStartWatch();
-      return;
-    }
-    // Save previous last sign as a marker (breadcrumbs) then move last sign to the new spot.
-    if(LS.last){
-      LS.markers.push({ lat: LS.last.lat, lon: LS.last.lon, ts: LS.last.ts, note:'previous last sign' });
-      if(LS.markers.length>200) LS.markers = LS.markers.slice(-200);
-    }
-    LS.last = { lat: LS.cur.lat, lon: LS.cur.lon, ts: Date.now() };
-    lsSave();
-    pulse();
-    lsUpdateUI();
-    setStatus('Marked new sign.');
-  }
-
-  function lsClearAll(){
-    const ok = window.confirm('Clear last sign + saved sign markers?');
-    if(!ok) return;
-    LS.last = null;
-    LS.markers = [];
-    lsSave();
-    pulse();
-    lsUpdateUI();
-    setStatus('Cleared.');
-  }
-
-  // UI wiring
-  lsLoad();
-  el.lastSignBtn?.addEventListener('click', e=>{
-    e.stopPropagation();
-    if(!LS.enabled){
-      lsEnter();
-      // If we have no last sign yet, guide the user immediately.
-      if(!LS.last && el.lsHint) el.lsHint.textContent='Step 1: Tap “Set / Move last sign” where you last saw blood.';
-    }else{
-      lsExit();
-    }
-  }, true);
-
-  el.lsExitBtn?.addEventListener('click', e=>{ e.stopPropagation(); lsExit(); }, true);
-  el.lsSetBtn?.addEventListener('click', e=>{ e.stopPropagation(); lsSetFromCurrent(); if(el.lsHint) el.lsHint.textContent='Now walk slow. Tap “Mark new sign” the second you see blood.'; }, true);
-  el.lsMarkBtn?.addEventListener('click', e=>{ e.stopPropagation(); lsMarkNewSign(); if(el.lsHint) el.lsHint.textContent='Good. Keep going. If you lose it, the arrow brings you back.'; }, true);
-  el.lsClearBtn?.addEventListener('click', e=>{ e.stopPropagation(); lsClearAll(); }, true);
 
   // --- PWA / "Add to Home Screen" helper UI ---
 
@@ -603,12 +383,12 @@
     // Android + Chrome (and compatible) with beforeinstallprompt: give big install button
     if (env.os === 'android' && (env.browser === 'chrome' || env.browser === 'samsung' || env.browser === 'opera') && deferredPrompt) {
       wrapper.innerHTML =
-        '<div class="install-step-title">Fast install (recommended)</div>' +
+        '<div class="install-step-title">Quick install (recommended)</div>' +
         '<ol>' +
           '<li><span class="install-step-body">Tap the big green button below.</span></li>' +
           '<li><span class="install-step-body">When the box pops up, tap <strong>Install</strong> or <strong>Add</strong>.</span></li>' +
         '</ol>' +
-        '<button class="install-now-btn" id="installNowBtn">⬇️  Install TrackTheDrops</button>' +
+        '<button class="install-now-btn" id="installNowBtn">⬇️  Tap here to add TrackTheDrop</button>' +
         '<div class="install-small-hint">Your phone will drop an icon on your home screen like a normal app.</div>';
       el.installSteps.appendChild(wrapper);
 
@@ -620,7 +400,7 @@
             const choice = await deferredPrompt.userChoice;
             if (choice && choice.outcome === 'accepted') {
               el.installSteps.innerHTML =
-                '<p class="install-note">Nice. Look for the new <strong>TrackTheDrops</strong> icon on your home screen. You can open it from there like a normal app.</p>';
+                '<p class="install-note">Nice. Look for the new <strong>TrackTheDrop</strong> icon on your home screen. You can open it from there like a normal app.</p>';
             } else {
               el.installSteps.innerHTML =
                 '<p class="install-note">If you changed your mind, open your browser menu and choose <strong>Install app</strong> or <strong>Add to Home screen</strong>.</p>';
@@ -644,10 +424,10 @@
             '<span class="install-step-body">In that menu, tap <strong>Add to Home screen</strong> or <strong>Add to Home Screen (shortcut)</strong>.</span>' +
           '</li>' +
           '<li>' +
-            '<span class="install-step-body">If it asks for a name, leave it as <strong>TrackTheDrops</strong> and tap <strong>Add</strong>.</span>' +
+            '<span class="install-step-body">If it asks for a name, leave it as <strong>TrackTheDrop</strong> and tap <strong>Add</strong>.</span>' +
           '</li>' +
           '<li>' +
-            '<span class="install-step-body">Go back to your phone\'s main screen. You should see a new <strong>TrackTheDrops</strong> icon you can tap.</span>' +
+            '<span class="install-step-body">Go back to your phone\'s main screen. You should see a new <strong>TrackTheDrop</strong> icon you can tap.</span>' +
           '</li>' +
         '</ol>' +
         '<p class="install-note">Once you see the icon, you can open it even with bad service — the app works offline after the first load.</p>';
@@ -667,10 +447,10 @@
             '<span class="install-step-body">Tap it, then look for <strong>Add to Home screen</strong> or <strong>Install app</strong>.</span>' +
           '</li>' +
           '<li>' +
-            '<span class="install-step-body">If it asks for a name, use <strong>TrackTheDrops</strong> and tap <strong>Add</strong>.</span>' +
+            '<span class="install-step-body">If it asks for a name, use <strong>TrackTheDrop</strong> and tap <strong>Add</strong>.</span>' +
           '</li>' +
           '<li>' +
-            '<span class="install-step-body">Go to your phone\'s main screen and look for the new <strong>TrackTheDrops</strong> icon.</span>' +
+            '<span class="install-step-body">Go to your phone\'s main screen and look for the new <strong>TrackTheDrop</strong> icon.</span>' +
           '</li>' +
         '</ol>' +
         '<p class="install-note">Open it from the icon next time instead of the browser. It will run full-screen and keep working in the woods.</p>';
@@ -690,10 +470,10 @@
             '<span class="install-step-body">Scroll the list and tap <strong>Add to Home Screen</strong>.</span>' +
           '</li>' +
           '<li>' +
-            '<span class="install-step-body">Leave the name as <strong>TrackTheDrops</strong> and tap <strong>Add</strong> in the top-right.</span>' +
+            '<span class="install-step-body">Leave the name as <strong>TrackTheDrop</strong> and tap <strong>Add</strong> in the top-right.</span>' +
           '</li>' +
           '<li>' +
-            '<span class="install-step-body">Go back to your home screen. You\'ll see a new <strong>TrackTheDrops</strong> icon.</span>' +
+            '<span class="install-step-body">Go back to your home screen. You\'ll see a new <strong>TrackTheDrop</strong> icon.</span>' +
           '</li>' +
         '</ol>' +
         '<p class="install-note">Always open the app from that icon. It will run full-screen and work even when service is spotty.</p>';
@@ -716,7 +496,7 @@
             '<span class="install-step-body">Tap <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</span>' +
           '</li>' +
           '<li>' +
-            '<span class="install-step-body">Now you will have a <strong>TrackTheDrops</strong> icon on your home screen.</span>' +
+            '<span class="install-step-body">Now you will have a <strong>TrackTheDrop</strong> icon on your home screen.</span>' +
           '</li>' +
         '</ol>' +
         '<p class="install-note">Apple only lets this work properly from Safari, not other browsers.</p>';
@@ -732,44 +512,12 @@
         '<li><span class="install-step-body">Look for <strong>Add to Home screen</strong> or <strong>Install app</strong>.</span></li>' +
         '<li><span class="install-step-body">Confirm the name and add it.</span></li>' +
       '</ol>' +
-      '<p class="install-note">After that, launch TrackTheDrops from your home screen instead of from the browser.</p>';
+      '<p class="install-note">After that, launch TrackTheDrop from your home screen instead of from the browser.</p>';
     el.installSteps.appendChild(wrapper);
   }
 
-  
-  // Night mode toggle (detection tuning)
-  el.nightBtn?.addEventListener('click', ev=>{
+  el.installBtn?.addEventListener('click', ev=>{
     ev.stopPropagation();
-    DETECT_NIGHT = !DETECT_NIGHT;
-    el.nightBtn.setAttribute('aria-pressed', String(DETECT_NIGHT));
-    el.nightBtn.textContent = 'Night: ' + (DETECT_NIGHT ? 'On' : 'Off');
-    setStatus('Detection: ' + (DETECT_NIGHT ? 'Night' : 'Auto'));
-  }, true);
-
-el.installBtn?.addEventListener('click', async ev=>{
-    ev.stopPropagation();
-
-    // Best-effort install automation:
-    // - Android / Desktop: use the native install prompt when available (beforeinstallprompt)
-    // - iOS Safari/Chrome: cannot be triggered programmatically; show the Add to Home Screen steps
-    if (deferredPrompt) {
-      try{
-        deferredPrompt.prompt();
-        const choice = await deferredPrompt.userChoice;
-        deferredPrompt = null;
-
-        if (choice && choice.outcome === 'accepted') {
-          // Browser will handle install; hide the button once we’re installed.
-          setStatus('Installed. Open TrackTheDrops from your home screen icon next time.');
-          if (el.installBtn) el.installBtn.style.display = 'none';
-          return;
-        }
-        // If they dismissed, fall through to the help UI (so they still know how to add it).
-      }catch{
-        deferredPrompt = null;
-      }
-    }
-
     openInstallHelp();
   }, true);
 
@@ -784,15 +532,39 @@ el.installBtn?.addEventListener('click', async ev=>{
     closeInstallHelp();
   }, true);
 
-  setStatus('Booting…');
-
-  // Service Worker (offline cache)
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./sw.js').catch(()=>{});
-  }
-
+  setStatus('Booting… (relaxed strict)');
   window.__TTD__={
     start:()=>{ if(!stream) start(); },
     stop:()=>{ if(stream) stop(); }
   };
 })();
+
+  // Strictness control (tap to loosen, long-press to tighten)
+  function loadStrictness(){
+    const v = Number(localStorage.getItem('ttd_strict'));
+    if(Number.isFinite(v)) STRICTNESS = Math.max(0, Math.min(100, v));
+    else STRICTNESS = 50;
+    el.strictBtn && (el.strictBtn.textContent = `Strict: ${STRICTNESS}`);
+  }
+  function setStrictness(v){
+    STRICTNESS = Math.max(0, Math.min(100, v));
+    localStorage.setItem('ttd_strict', String(STRICTNESS));
+    if(el.strictBtn) el.strictBtn.textContent = `Strict: ${STRICTNESS}`;
+    // quick feedback in HUD
+    if(el.status) el.status.textContent = `Streaming… | Strict ${STRICTNESS}`;
+  }
+  loadStrictness();
+
+  el.strictBtn?.addEventListener('click', ev=>{
+    ev.stopPropagation();
+    // Loosen a little each tap (more sensitive)
+    setStrictness(STRICTNESS - 5);
+  }, true);
+
+  // iOS long-press triggers contextmenu; use it to tighten.
+  el.strictBtn?.addEventListener('contextmenu', ev=>{
+    ev.preventDefault();
+    ev.stopPropagation();
+    setStrictness(STRICTNESS + 5);
+  }, {capture:true});
+
