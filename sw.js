@@ -1,5 +1,5 @@
 // sw.js — TrackTheDrops PWA cache
-const CACHE = 'ttd-cache-v3';
+const CACHE = 'ttd-cache-v4';
 const CORE = [
   './',
   './index.html',

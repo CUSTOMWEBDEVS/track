@@ -1,4 +1,6 @@
 (function(){
+  let DETECT_NIGHT = false;
+  let __maskEMA = null;
   'use strict';
   const $=id=>document.getElementById(id);
   const el={
@@ -22,6 +24,7 @@
     installSteps:$('installSteps'),
     installClose:$('installClose'),
     installEnv:$('installEnv'),
+    nightBtn:$('nightBtn'),
     lastSignBtn:$('lastSignBtn'),
     lsLock:$('lsLock'),
     lsExitBtn:$('lsExitBtn'),
@@ -95,28 +98,34 @@
 
   // Slightly relaxed “is-blood-like” boolean gate
   function isBloodish(r,g,b,sens){
-    if(!(r>g && g>=b)) return 0;
-    const {h,s,v}=toHSV(r,g,b); const hDeg=h*360;
-    const hTol = 14 + 6*(1-sens);                 // widen hue window a bit
-    if(hueDist(hDeg,0)>hTol) return 0;
-    if(s < (0.53 - 0.10*(sens))) return 0;        // allow slightly lower saturation
-    if(v < 0.08 || v > (0.70 + 0.04*(1-sens))) return 0; // allow brighter dark reds but still cap bright highlights
+  const night = DETECT_NIGHT;
 
-    // Channel dominance (slightly looser)
-    if((r-g) < 12 || (r-b) < 20) return 0;
+  const {h,s,v} = toHSV(r,g,b);
+  const hDeg = h*360;
 
-    // YCbCr: lower Cr' threshold, raise Y cap a touch
-    const {y,cb,cr}=toYCbCr(r,g,b);
-    const crRel = cr - 0.55*cb;
-    if (crRel < (85 - 8*sens)) return 0;
-    if (y > (192 + 8*(1-sens))) return 0;
+  const Y  = 0.299*r + 0.587*g + 0.114*b;
+  const Cb = 128 - 0.168736*r - 0.331264*g + 0.5*b;
+  const Cr = 128 + 0.5*r - 0.418688*g - 0.081312*b;
 
-    // Lab anti-plastic loosened
-    const L = toLab(r,g,b);
-    if (L.a < (30 - 6*(1-sens)) || L.b > (26 + 6*(1-sens)) || L.L > 72) return 0;
+  const redDom = (r > g + 18) && (r > b + 18);
+  const yGate  = Y > (night ? 14 : 26);
+  const cbGate = Cb < (night ? 136 : 128);
+  const crGate = Cr > (night ? 144 : 150);
+  const hueOk  = (hDeg < (night ? 28 : 22) || hDeg > 350);
 
-    return 1;
-  }
+  const R=r/255,G=g/255,B=b/255;
+  const max=Math.max(R,G,B), min=Math.min(R,G,B);
+  const chroma=max-min;
+  const sat=max===0?0:chroma/max;
+  const satGate = sat > (night ? 0.11 : 0.16) || s > (night ? 0.10 : 0.14);
+
+  const ycc = yGate && cbGate && crGate;
+  const dom = redDom && hueOk && v > (night ? 0.04 : 0.10);
+
+  if(!night && Y > 170 && !redDom) return 0;
+
+  return (satGate && (ycc || dom)) ? 1 : 0;
+}
 
   function blobs(binary,w,h,minArea,maxArea){
     const vis=new Uint8Array(w*h), out=[];
@@ -237,8 +246,15 @@
     else if(avgY < 75) thr = Math.max(0.45, thr - 0.06);
     const rng=Math.max(1e-6,max-min);
     const bin=new Uint8Array(procW*procH);
+    // Temporal smoothing (EMA) over binary score to reduce flicker/noise.
+    // Keeps faint blood visible at night without needing to be inches from the ground.
+    if(!__maskEMA || __maskEMA.length !== score.length) __maskEMA = new Float32Array(score.length);
+    const emaA = DETECT_NIGHT ? 0.30 : 0.22;
     for(let i=0;i<score.length;i++){
-      const n=(score[i]-min)/rng;
+      __maskEMA[i] = __maskEMA[i]*(1-emaA) + score[i]*emaA;
+    }
+    for(let i=0;i<score.length;i++){
+      const n=__maskEMA[i];
       if(n>=thr) bin[i]=1;
     }
 
@@ -722,8 +738,40 @@
     el.installSteps.appendChild(wrapper);
   }
 
-  el.installBtn?.addEventListener('click', ev=>{
+  
+  // Night mode toggle (detection tuning)
+  el.nightBtn?.addEventListener('click', ev=>{
     ev.stopPropagation();
+    DETECT_NIGHT = !DETECT_NIGHT;
+    el.nightBtn.setAttribute('aria-pressed', String(DETECT_NIGHT));
+    el.nightBtn.textContent = 'Night: ' + (DETECT_NIGHT ? 'On' : 'Off');
+    setStatus('Detection: ' + (DETECT_NIGHT ? 'Night' : 'Auto'));
+  }, true);
+
+el.installBtn?.addEventListener('click', async ev=>{
+    ev.stopPropagation();
+
+    // Best-effort install automation:
+    // - Android / Desktop: use the native install prompt when available (beforeinstallprompt)
+    // - iOS Safari/Chrome: cannot be triggered programmatically; show the Add to Home Screen steps
+    if (deferredPrompt) {
+      try{
+        deferredPrompt.prompt();
+        const choice = await deferredPrompt.userChoice;
+        deferredPrompt = null;
+
+        if (choice && choice.outcome === 'accepted') {
+          // Browser will handle install; hide the button once we’re installed.
+          setStatus('Installed. Open TrackTheDrops from your home screen icon next time.');
+          if (el.installBtn) el.installBtn.style.display = 'none';
+          return;
+        }
+        // If they dismissed, fall through to the help UI (so they still know how to add it).
+      }catch{
+        deferredPrompt = null;
+      }
+    }
+
     openInstallHelp();
   }, true);
 
