@@ -1,8 +1,6 @@
 (function(){
-  'use strict';
 
-  // Detection strictness (45 = current baseline (v0.95))
-  let STRICTNESS = 45;
+  let STRICTNESS = 30;
   const $=id=>document.getElementById(id);
   const el={
     app:$('app'),
@@ -86,7 +84,6 @@
 
   // Slightly relaxed “is-blood-like” boolean gate
   function isBloodish(r,g,b,sens){
-  // STRICTNESS: 0 = very sensitive, 45 = current baseline (v0.95), 100 = very strict
   const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
   const adj = clamp((STRICTNESS-50)/50, -1, 1); // -1..1
 
@@ -108,7 +105,6 @@
   let bMax   = 26 + 6*(1-sens);
   let LMax   = 72;
 
-  // Apply strictness adjustment: negative = loosen, positive = tighten
   hueTol = clamp(hueTol - 6*adj, 6, 34);
   satMin = clamp(satMin + 0.10*adj, 0.25, 0.85);
   vMin   = clamp(vMin   + 0.04*adj, 0.03, 0.22);
