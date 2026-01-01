@@ -1,6 +1,8 @@
 (function(){
   let DETECT_NIGHT = false;
   let __maskEMA = null;
+  let __dynTight = 0;
+  const clamp = (v,a,b)=>Math.max(a, Math.min(b,v));
   'use strict';
   const $=id=>document.getElementById(id);
   const el={
@@ -97,34 +99,30 @@
   const hueDist=(deg,ref)=>{let d=Math.abs(deg-ref)%360;return d>180?360-d:d};
 
   // Slightly relaxed “is-blood-like” boolean gate
-  function isBloodish(r,g,b,sens){
+  function isBloodish(r,g,b,sens,tight){
+  // tight: 0 (normal) -> 2 (very strict). Auto-adjusted per frame when scene is "too red".
   const night = DETECT_NIGHT;
-
-  const {h,s,v} = toHSV(r,g,b);
-  const hDeg = h*360;
 
   const Y  = 0.299*r + 0.587*g + 0.114*b;
   const Cb = 128 - 0.168736*r - 0.331264*g + 0.5*b;
   const Cr = 128 + 0.5*r - 0.418688*g - 0.081312*b;
 
-  const redDom = (r > g + 18) && (r > b + 18);
-  const yGate  = Y > (night ? 14 : 26);
-  const cbGate = Cb < (night ? 136 : 128);
-  const crGate = Cr > (night ? 144 : 150);
-  const hueOk  = (hDeg < (night ? 28 : 22) || hDeg > 350);
+  const diff = Cr - Cb; // blood tends to have higher Cr and lower Cb
 
-  const R=r/255,G=g/255,B=b/255;
-  const max=Math.max(R,G,B), min=Math.min(R,G,B);
-  const chroma=max-min;
-  const sat=max===0?0:chroma/max;
-  const satGate = sat > (night ? 0.11 : 0.16) || s > (night ? 0.10 : 0.14);
+  const redDom = (r > g + (18 + tight*10)) && (r > b + (18 + tight*10));
+  const ratio  = r / (g + b + 1); // > ~0.50 means red is dominant
 
-  const ycc = yGate && cbGate && crGate;
-  const dom = redDom && hueOk && v > (night ? 0.04 : 0.10);
+  // Gates (night relaxes Y and diff slightly; tight raises dominance requirements)
+  const yGate   = Y > (night ? 12 : 24);
+  const cbGate  = Cb < (night ? 142 : 128);
+  const crGate  = Cr > (night ? 140 : 150);
+  const diffGate= diff > (night ? (10 + tight*10) : (18 + tight*14));
+  const ratioGate = ratio > (night ? (0.46 + tight*0.06) : (0.52 + tight*0.08));
 
-  if(!night && Y > 170 && !redDom) return 0;
+  // Kill obvious non-blood highlights (bright neutral surfaces)
+  if(!night && Y > 185 && !redDom) return 0;
 
-  return (satGate && (ycc || dom)) ? 1 : 0;
+  return (yGate && cbGate && crGate && diffGate && ratioGate && redDom) ? 1 : 0;
 }
 
   function blobs(binary,w,h,minArea,maxArea){
@@ -249,7 +247,7 @@
     // Temporal smoothing (EMA) over binary score to reduce flicker/noise.
     // Keeps faint blood visible at night without needing to be inches from the ground.
     if(!__maskEMA || __maskEMA.length !== score.length) __maskEMA = new Float32Array(score.length);
-    const emaA = DETECT_NIGHT ? 0.30 : 0.22;
+    const emaA = DETECT_NIGHT ? 0.22 : (0.18 + __dynTight*0.04);
     for(let i=0;i<score.length;i++){
       __maskEMA[i] = __maskEMA[i]*(1-emaA) + score[i]*emaA;
     }
