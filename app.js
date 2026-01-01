@@ -1,8 +1,5 @@
 (function(){
   'use strict';
-
-  // Detection strictness (50 = original baseline)
-  let STRICTNESS = 30;
   const $=id=>document.getElementById(id);
   const el={
     app:$('app'),
@@ -15,7 +12,6 @@
     startBtn:$('startBtn'),
     torchBtn:$('torchBtn'),
     alertBtn:$('alertBtn'),
-    strictBtn:$('strictBtn'),
     flash:$('flash'),
     sens:$('sens'),
     thr:$('thr'),
@@ -87,67 +83,28 @@
 
   // Slightly relaxed “is-blood-like” boolean gate
   function isBloodish(r,g,b,sens){
-  // STRICTNESS: 0 = very sensitive, 50 = original baseline, 100 = very strict
-  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
-  const adj = clamp((STRICTNESS-50)/50, -1, 1); // -1..1
+    if(!(r>g && g>=b)) return 0;
+    const {h,s,v}=toHSV(r,g,b); const hDeg=h*360;
+    const hTol = 14 + 6*(1-sens);                 // widen hue window a bit
+    if(hueDist(hDeg,0)>hTol) return 0;
+    if(s < (0.53 - 0.10*(sens))) return 0;        // allow slightly lower saturation
+    if(v < 0.08 || v > (0.70 + 0.04*(1-sens))) return 0; // allow brighter dark reds but still cap bright highlights
 
-  const {h,s,v} = toHSV(r,g,b);
-  const hDeg = h*360;
+    // Channel dominance (slightly looser)
+    if((r-g) < 12 || (r-b) < 20) return 0;
 
-  // Base thresholds (original)
-  let hueTol = 14 + 6*(1-sens);              // wider at lower sens
-  let satMin = 0.53 - 0.10*sens;             // lower sens -> higher sat required
-  let vMin   = 0.08;                         // ignore very dark pixels
-  let vMax   = 0.70 + 0.04*(1-sens);          // allow slightly brighter reds
-  let yMax   = 192 + 8*(1-sens);              // reject very bright areas
-  let crRel  = 85 - 8*sens;                   // Cr-Cb must exceed
-  let domRG  = 12;
-  let domRB  = 20;
+    // YCbCr: lower Cr' threshold, raise Y cap a touch
+    const {y,cb,cr}=toYCbCr(r,g,b);
+    const crRel = cr - 0.55*cb;
+    if (crRel < (85 - 8*sens)) return 0;
+    if (y > (192 + 8*(1-sens))) return 0;
 
-  // Lab gate (original)
-  let aMin   = 30 - 6*(1-sens);
-  let bMax   = 26 + 6*(1-sens);
-  let LMax   = 72;
+    // Lab anti-plastic loosened
+    const L = toLab(r,g,b);
+    if (L.a < (30 - 6*(1-sens)) || L.b > (26 + 6*(1-sens)) || L.L > 72) return 0;
 
-  // Apply strictness adjustment: negative = loosen, positive = tighten
-  hueTol = clamp(hueTol - 6*adj, 6, 34);
-  satMin = clamp(satMin + 0.10*adj, 0.25, 0.85);
-  vMin   = clamp(vMin   + 0.04*adj, 0.03, 0.22);
-  vMax   = clamp(vMax   - 0.06*adj, 0.35, 0.92);
-  yMax   = clamp(yMax   - 22*adj, 120, 235);
-  crRel  = clamp(crRel  + 12*adj, 40, 120);
-  domRG  = clamp(domRG  + 10*adj, 0, 35);
-  domRB  = clamp(domRB  + 10*adj, 0, 45);
-
-  aMin   = clamp(aMin   + 10*adj, 10, 60);
-  bMax   = clamp(bMax   - 10*adj,  6, 50);
-  LMax   = clamp(LMax   - 10*adj, 45, 90);
-
-  // Basic red dominance
-  if(!(r>g && g>=b)) return 0;
-  if(r-g < domRG || r-b < domRB) return 0;
-
-  // Hue / sat / value gating
-  const nearRed = (hDeg<=hueTol || hDeg>=360-hueTol);
-  if(!nearRed) return 0;
-  if(s < satMin) return 0;
-  if(v < vMin || v > vMax) return 0;
-
-  // YCbCr gating: red tends to push Cr up and Cb down
-  const Y  = 0.299*r + 0.587*g + 0.114*b;
-  if(Y > yMax) return 0;
-  const Cb = 128 - 0.168736*r - 0.331264*g + 0.5*b;
-  const Cr = 128 + 0.5*r - 0.418688*g - 0.081312*b;
-  if((Cr - Cb) < crRel) return 0;
-
-  // Lab gating: blood is positive a (red/magenta) with relatively low b (not yellow)
-  const {L,a,bb} = rgbToLab(r,g,b);
-  if(a < aMin) return 0;
-  if(bb > bMax) return 0;
-  if(L > LMax) return 0;
-
-  return 1;
-}
+    return 1;
+  }
 
   function blobs(binary,w,h,minArea,maxArea){
     const vis=new Uint8Array(w*h), out=[];
@@ -538,33 +495,3 @@
     stop:()=>{ if(stream) stop(); }
   };
 })();
-
-  // Strictness control (tap to loosen, long-press to tighten)
-  function loadStrictness(){
-    const v = Number(localStorage.getItem('ttd_strict'));
-    if(Number.isFinite(v)) STRICTNESS = Math.max(0, Math.min(100, v));
-    else STRICTNESS = 30;
-    el.strictBtn && (el.strictBtn.textContent = `Strict: ${STRICTNESS}`);
-  }
-  function setStrictness(v){
-    STRICTNESS = Math.max(0, Math.min(100, v));
-    localStorage.setItem('ttd_strict', String(STRICTNESS));
-    if(el.strictBtn) el.strictBtn.textContent = `Strict: ${STRICTNESS}`;
-    // quick feedback in HUD
-    if(el.status) el.status.textContent = `Streaming… | Strict ${STRICTNESS}`;
-  }
-  loadStrictness();
-
-  el.strictBtn?.addEventListener('click', ev=>{
-    ev.stopPropagation();
-    // Loosen a little each tap (more sensitive)
-    setStrictness(STRICTNESS - 5);
-  }, true);
-
-  // iOS long-press triggers contextmenu; use it to tighten.
-  el.strictBtn?.addEventListener('contextmenu', ev=>{
-    ev.preventDefault();
-    ev.stopPropagation();
-    setStrictness(STRICTNESS + 5);
-  }, {capture:true});
-
