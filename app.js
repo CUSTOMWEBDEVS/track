@@ -1,8 +1,8 @@
 (function(){
   'use strict';
 
-  // Detection strictness (50 = original baseline)
-  let STRICTNESS = 50;
+  // Detection strictness (45 = current baseline (v0.95))
+  let STRICTNESS = 45;
   const $=id=>document.getElementById(id);
   const el={
     app:$('app'),
@@ -15,7 +15,6 @@
     startBtn:$('startBtn'),
     torchBtn:$('torchBtn'),
     alertBtn:$('alertBtn'),
-    strictBtn:$('strictBtn'),
     flash:$('flash'),
     sens:$('sens'),
     thr:$('thr'),
@@ -87,7 +86,7 @@
 
   // Slightly relaxed “is-blood-like” boolean gate
   function isBloodish(r,g,b,sens){
-  // STRICTNESS: 0 = very sensitive, 50 = original baseline, 100 = very strict
+  // STRICTNESS: 0 = very sensitive, 45 = current baseline (v0.95), 100 = very strict
   const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
   const adj = clamp((STRICTNESS-50)/50, -1, 1); // -1..1
 
@@ -532,39 +531,12 @@
     closeInstallHelp();
   }, true);
 
-  setStatus('Booting… (relaxed strict)');
+  setStatus('Booting…');
   window.__TTD__={
     start:()=>{ if(!stream) start(); },
     stop:()=>{ if(stream) stop(); }
   };
 })();
-
-  // Strictness control (tap to loosen, long-press to tighten)
-  function loadStrictness(){
-    const v = Number(localStorage.getItem('ttd_strict'));
-    if(Number.isFinite(v)) STRICTNESS = Math.max(0, Math.min(100, v));
-    else STRICTNESS = 50;
-    el.strictBtn && (el.strictBtn.textContent = `Strict: ${STRICTNESS}`);
-  }
-  function setStrictness(v){
-    STRICTNESS = Math.max(0, Math.min(100, v));
-    localStorage.setItem('ttd_strict', String(STRICTNESS));
-    if(el.strictBtn) el.strictBtn.textContent = `Strict: ${STRICTNESS}`;
-    // quick feedback in HUD
-    if(el.status) el.status.textContent = `Streaming… | Strict ${STRICTNESS}`;
-  }
-  loadStrictness();
-
-  el.strictBtn?.addEventListener('click', ev=>{
     ev.stopPropagation();
-    // Loosen a little each tap (more sensitive)
-    setStrictness(STRICTNESS - 5);
-  }, true);
-
-  // iOS long-press triggers contextmenu; use it to tighten.
-  el.strictBtn?.addEventListener('contextmenu', ev=>{
-    ev.preventDefault();
-    ev.stopPropagation();
-    setStrictness(STRICTNESS + 5);
   }, {capture:true});
 
