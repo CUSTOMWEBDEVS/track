@@ -1,5 +1,7 @@
 (function(){
+  'use strict';
 
+  // Detection strictness (50 = original baseline)
   let STRICTNESS = 30;
   const $=id=>document.getElementById(id);
   const el={
@@ -13,6 +15,7 @@
     startBtn:$('startBtn'),
     torchBtn:$('torchBtn'),
     alertBtn:$('alertBtn'),
+    strictBtn:$('strictBtn'),
     flash:$('flash'),
     sens:$('sens'),
     thr:$('thr'),
@@ -84,6 +87,7 @@
 
   // Slightly relaxed “is-blood-like” boolean gate
   function isBloodish(r,g,b,sens){
+  // STRICTNESS: 0 = very sensitive, 50 = original baseline, 100 = very strict
   const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
   const adj = clamp((STRICTNESS-50)/50, -1, 1); // -1..1
 
@@ -105,6 +109,7 @@
   let bMax   = 26 + 6*(1-sens);
   let LMax   = 72;
 
+  // Apply strictness adjustment: negative = loosen, positive = tighten
   hueTol = clamp(hueTol - 6*adj, 6, 34);
   satMin = clamp(satMin + 0.10*adj, 0.25, 0.85);
   vMin   = clamp(vMin   + 0.04*adj, 0.03, 0.22);
@@ -527,12 +532,39 @@
     closeInstallHelp();
   }, true);
 
-  setStatus('Booting…');
+  setStatus('Booting… (relaxed strict)');
   window.__TTD__={
     start:()=>{ if(!stream) start(); },
     stop:()=>{ if(stream) stop(); }
   };
 })();
+
+  // Strictness control (tap to loosen, long-press to tighten)
+  function loadStrictness(){
+    const v = Number(localStorage.getItem('ttd_strict'));
+    if(Number.isFinite(v)) STRICTNESS = Math.max(0, Math.min(100, v));
+    else STRICTNESS = 30;
+    el.strictBtn && (el.strictBtn.textContent = `Strict: ${STRICTNESS}`);
+  }
+  function setStrictness(v){
+    STRICTNESS = Math.max(0, Math.min(100, v));
+    localStorage.setItem('ttd_strict', String(STRICTNESS));
+    if(el.strictBtn) el.strictBtn.textContent = `Strict: ${STRICTNESS}`;
+    // quick feedback in HUD
+    if(el.status) el.status.textContent = `Streaming… | Strict ${STRICTNESS}`;
+  }
+  loadStrictness();
+
+  el.strictBtn?.addEventListener('click', ev=>{
     ev.stopPropagation();
+    // Loosen a little each tap (more sensitive)
+    setStrictness(STRICTNESS - 5);
+  }, true);
+
+  // iOS long-press triggers contextmenu; use it to tighten.
+  el.strictBtn?.addEventListener('contextmenu', ev=>{
+    ev.preventDefault();
+    ev.stopPropagation();
+    setStrictness(STRICTNESS + 5);
   }, {capture:true});
 
